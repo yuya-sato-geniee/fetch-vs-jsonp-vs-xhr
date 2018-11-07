@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="icon" href="data:;base64,iVBORw0KGgo=">
+  <title>Document</title>
+  <script>
+    setTimeout(() => main(), 2000);
+
+    %NeverOptimizeFunction(research);
+    %NeverOptimizeFunction(benchmark);
+    %NeverOptimizeFunction(makeFetchRequests);
+    %NeverOptimizeFunction(makeJsonpRequests);
+    %NeverOptimizeFunction(makeJsonpRequestsWithoutFragment);
+    %NeverOptimizeFunction(makeXhrRequests);
+
+    async function main() {
+      const countTable = [[500, 1], [50, 10], [5, 100]]
+      const functions = [makeFetchRequests, makeJsonpRequests, makeJsonpRequestsWithoutFragment, makeXhrRequests]
+      const result = {}
+      for (let [r, b] of countTable) {
+        for (let fn of functions) {
+          const key = `${fn.name}: ${b}回request${r}回計測`
+          result[key] = await research(r, b, fn)
+        }
+      }
+      console.table(result)
+    }
+
+    async function research(researchCount, benchmarkCount, fn) {
+      let result = []
+      for (let i = 0; i < researchCount; i++) {
+        result.push(await benchmark(benchmarkCount, fn))
+        await delay(100)
+      }
+      result = result.map(v => v / benchmarkCount)
+      return {
+        '1reqの平均(ms)': average(result),
+        '標準偏差(ms)': sd(result)
+      }
+    }
+
+    async function benchmark(count, targetFn) {
+      %CollectGarbage(null) // v8 --allow-natives-syntax RuntimeFunction
+
+      const randoms = Array.from({length: count}, () => Math.random().toString(36).slice(-8))
+      const start = performance.now()
+      const promises = targetFn(count, randoms)
+      return Promise.all(promises).then((responses) => {
+        const end = performance.now()
+        Promise.resolve(end - start)
+        const testPassed = responses.every(s => {
+          return s === '{"message":"hello world"}'
+            || JSON.stringify(s) === '{"message":"hello world"}'
+        })
+        return testPassed ? Promise.resolve(end - start) : Promise.reject('test failed')
+      })
+    }
+
+    function makeFetchRequests(count, randoms) {
+      return Array.from({length: count}, (_, i) => {
+        return fetch(`./response-fetch.json?rnd=${randoms[i]}`)
+          .then(res => res.text())
+      })
+    }
+
+    function makeJsonpRequests(count, randoms) {
+      const fragment = document.createDocumentFragment()
+      Array.from({length: count}).forEach((_, i) => {
+        const script = document.createElement('script')
+        script.src = `./response-jsonp.js?rnd=${randoms[i]}`
+        script.async = true
+        fragment.appendChild(script)
+      })
+      document.head.appendChild(fragment)
+      return Array.from({length: count}, (_, i) => new Promise((resolve, reject) => {
+        window[`jsonp${randoms[i]}`] = (data) => { resolve(data) }
+      }))
+    }
+
+    function makeJsonpRequestsWithoutFragment(count, randoms) {
+      Array.from({length: count}).forEach((_, i) => {
+        const script = document.createElement('script')
+        script.src = `./response-jsonp.js?rnd=${randoms[i]}`
+        script.async = true
+        document.head.appendChild(script)
+      })
+      return Array.from({length: count}, (_, i) => new Promise((resolve, reject) => {
+        window[`jsonp${randoms[i]}`] = (data) => { resolve(data) }
+      }))
+    }
+
+    function makeXhrRequests(count, randoms) {
+      return Array.from({length: count}, (_, i) => new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest()
+        xhr.onreadystatechange = () => {
+          if (xhr.readyState === 4) { // 受信完了
+            resolve(xhr.responseText)
+          }
+        }
+        xhr.open('GET', `./response-fetch.json?rnd=${randoms[i]}`, /*async*/true)
+        xhr.send(null)
+      }))
+    }
+
+    function average(ary) {
+      return ary.reduce((a, b) => a + b, 0) / ary.length
+    }
+
+    function sd(ary) {
+      const avr = average(ary)
+      const tmp = ary.map(v => (v - avr) ** 2).reduce((a, b) => a + b, 0)
+      return tmp / ary.length
+    }
+    function delay(time) {
+      return new Promise(function(resolve) {
+        setTimeout(resolve, time)
+      });
+    }
+
+  </script>
+</head>
+<body>
+
+</body>
+</html>
